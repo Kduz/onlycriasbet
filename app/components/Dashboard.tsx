@@ -8,6 +8,7 @@ import {
   Home,
   LogOut,
   Menu,
+  Shield,
   User,
   Users,
   Wallet,
@@ -17,17 +18,20 @@ import { AnimatePresence, motion } from 'framer-motion';
 import AviatorGame from './AviatorGame';
 import RouletteGame from './RouletteGame';
 import MinesGame from './MinesGame';
+import BlackjackGame from './BlackjackGame';
+import AdminPanel from './AdminPanel';
 import AffiliateTab from './AffiliateTab';
 import RichLeaderboard from './RichLeaderboard';
 import GameToastProvider from './GameToastProvider';
 import type { AffiliateProfile } from '../lib/affiliate';
+import { isHouseEmail } from '../lib/house-bank';
 
 export type ProfileUser = {
   id: string;
   email?: string | null;
 };
 
-type TabId = 'home' | 'games' | 'affiliates' | 'account';
+type TabId = 'home' | 'games' | 'affiliates' | 'account' | 'admin';
 
 type DashboardProps = {
   user: ProfileUser;
@@ -38,6 +42,7 @@ type DashboardProps = {
   affiliate: AffiliateProfile | null;
   affiliateLoading: boolean;
   onRefreshAffiliate: () => Promise<void>;
+  onRefreshBalance?: () => void;
 };
 
 const GAMES = [
@@ -65,6 +70,14 @@ const GAMES = [
     tag: 'Ao vivo',
     available: true,
   },
+  {
+    id: 'blackjack-21',
+    name: '21 dos Crias',
+    description: 'Blackjack clássico · solo vs banca · BJ paga 3:2.',
+    emoji: '🂡',
+    tag: 'Solo',
+    available: true,
+  },
 ] as const;
 
 export default function Dashboard({
@@ -76,10 +89,12 @@ export default function Dashboard({
   affiliate,
   affiliateLoading,
   onRefreshAffiliate,
+  onRefreshBalance,
 }: DashboardProps) {
   const [tab, setTab] = useState<TabId>('home');
   const [activeGame, setActiveGame] = useState<string | null>(null);
   const [menuOpen, setMenuOpen] = useState(false);
+  const isAdmin = isHouseEmail(user.email);
 
   const openGames = () => {
     setActiveGame(null);
@@ -117,6 +132,9 @@ export default function Dashboard({
     { id: 'home', label: 'Início', desc: 'Resumo e atalhos', icon: Home },
     { id: 'games', label: 'Jogos', desc: 'Aviator e mais', icon: Gamepad2 },
     { id: 'affiliates', label: 'Afiliados', desc: 'Código e comissões', icon: Users },
+    ...(isAdmin
+      ? [{ id: 'admin' as const, label: 'Banca', desc: 'Painel admin', icon: Shield }]
+      : []),
     { id: 'account', label: 'Conta', desc: 'Perfil e saldo', icon: User },
   ];
 
@@ -128,12 +146,18 @@ export default function Dashboard({
           ? 'Roleta'
           : activeGame === 'mines-minecraft'
             ? 'Mines'
-            : activeGame
-              ? 'Aviator'
-              : 'Jogos'
+            : activeGame === 'blackjack-21'
+              ? '21'
+              : activeGame === 'aviator-oliver-tree'
+                ? 'Aviator'
+                : activeGame
+                  ? 'Jogo'
+                  : 'Jogos'
         : tab === 'affiliates'
           ? 'Afiliados'
-          : 'Conta';
+          : tab === 'admin'
+            ? 'Banca'
+            : 'Conta';
 
   return (
     <GameToastProvider userId={user.id} userEmail={user.email}>
@@ -252,8 +276,11 @@ export default function Dashboard({
       {/* Content — largura maior no Aviator para caber gráfico + ranking */}
       <main
         className={`flex-1 px-3 sm:px-5 pb-8 w-full mx-auto ${
-          tab === 'games' && activeGame === 'mines-minecraft'
+          tab === 'games' &&
+          (activeGame === 'mines-minecraft' || activeGame === 'blackjack-21')
             ? 'max-w-6xl pt-1 sm:pt-2'
+            : tab === 'admin'
+              ? 'max-w-5xl py-3 sm:py-4'
             : tab === 'games' && activeGame
               ? 'max-w-6xl py-3 sm:py-4'
               : tab === 'home'
@@ -267,9 +294,11 @@ export default function Dashboard({
             email={user.email}
             userId={user.id}
             affiliateCode={affiliate?.affiliateCode}
+            isAdmin={isAdmin}
             onPlayAviator={playAviator}
             onOpenGames={() => selectTab('games')}
             onOpenAffiliates={() => selectTab('affiliates')}
+            onOpenAdmin={() => selectTab('admin')}
             onOpenMenu={() => setMenuOpen(true)}
           />
         )}
@@ -306,6 +335,16 @@ export default function Dashboard({
           />
         )}
 
+        {tab === 'games' && activeGame === 'blackjack-21' && (
+          <BlackjackGame
+            user={user}
+            balance={balance}
+            onBalanceChange={onBalanceChange}
+            onBack={openGames}
+            updateBalance={updateBalance}
+          />
+        )}
+
         {tab === 'affiliates' && (
           <AffiliateTab
             userId={user.id}
@@ -315,13 +354,23 @@ export default function Dashboard({
           />
         )}
 
+        {tab === 'admin' && isAdmin && (
+          <AdminPanel
+            balance={balance}
+            onBack={() => selectTab('home')}
+            onBalanceRefresh={onRefreshBalance}
+          />
+        )}
+
         {tab === 'account' && (
           <AccountTab
             user={user}
             balance={balance}
             affiliate={affiliate}
+            isAdmin={isAdmin}
             onLogout={onLogout}
             onOpenAffiliates={() => selectTab('affiliates')}
+            onOpenAdmin={() => selectTab('admin')}
           />
         )}
       </main>
@@ -335,18 +384,22 @@ function HomeTab({
   email,
   userId,
   affiliateCode,
+  isAdmin,
   onPlayAviator,
   onOpenGames,
   onOpenAffiliates,
+  onOpenAdmin,
   onOpenMenu,
 }: {
   balance: number;
   email?: string | null;
   userId: string;
   affiliateCode?: string;
+  isAdmin?: boolean;
   onPlayAviator: () => void;
   onOpenGames: () => void;
   onOpenAffiliates: () => void;
+  onOpenAdmin?: () => void;
   onOpenMenu: () => void;
 }) {
   const firstName = email?.split('@')[0] ?? 'cria';
@@ -369,6 +422,31 @@ function HomeTab({
 
       <div className="home-grid">
         <div className="space-y-4">
+          {isAdmin && onOpenAdmin && (
+            <section className="surface p-4 sm:p-5 admin-home-card">
+              <div className="flex items-start gap-3">
+                <div
+                  className="w-11 h-11 rounded-2xl flex items-center justify-center shrink-0"
+                  style={{ background: 'linear-gradient(135deg,#b45309,#f59e0b)' }}
+                >
+                  <Shield size={22} className="text-white" />
+                </div>
+                <div className="min-w-0 flex-1">
+                  <div className="flex items-center gap-2 flex-wrap mb-0.5">
+                    <h2 className="text-base sm:text-lg font-bold">Painel da Banca</h2>
+                    <span className="badge badge-warn">Admin</span>
+                  </div>
+                  <p className="text-sm text-[var(--text-secondary)]">
+                    Cofre: {balance} Kz · perdas dos jogos caem aqui
+                  </p>
+                </div>
+              </div>
+              <button type="button" onClick={onOpenAdmin} className="btn btn-purple w-full mt-4">
+                Abrir painel admin
+              </button>
+            </section>
+          )}
+
           <section className="surface p-4 sm:p-5 glow-purple">
             <div className="flex items-start gap-3">
               <div
@@ -458,7 +536,15 @@ function GamesTab({ onSelectGame }: { onSelectGame: (id: string) => void }) {
             <div className="min-w-0 flex-1">
               <div className="flex items-center gap-2 flex-wrap mb-0.5">
                 <h2 className="font-bold text-base sm:text-lg">{game.name}</h2>
-                <span className={`badge ${game.available ? 'badge-live' : 'badge-soon'}`}>
+                <span
+                  className={`badge ${
+                    !game.available
+                      ? 'badge-soon'
+                      : game.tag === 'Solo'
+                        ? 'badge-info'
+                        : 'badge-live'
+                  }`}
+                >
                   {game.tag}
                 </span>
               </div>
@@ -476,14 +562,18 @@ function AccountTab({
   user,
   balance,
   affiliate,
+  isAdmin,
   onLogout,
   onOpenAffiliates,
+  onOpenAdmin,
 }: {
   user: ProfileUser;
   balance: number;
   affiliate: AffiliateProfile | null;
+  isAdmin?: boolean;
   onLogout: () => void;
   onOpenAffiliates: () => void;
+  onOpenAdmin?: () => void;
 }) {
   return (
     <div className="space-y-5 max-w-lg">
@@ -496,9 +586,12 @@ function AccountTab({
         <div className="p-4 sm:p-5">
           <p className="section-label mb-1">Email</p>
           <p className="text-base font-medium break-all">{user.email ?? '—'}</p>
+          {isAdmin && (
+            <p className="text-xs text-amber-300 mt-1 font-semibold">Conta da banca · admin</p>
+          )}
         </div>
         <div className="p-4 sm:p-5">
-          <p className="section-label mb-1">Saldo</p>
+          <p className="section-label mb-1">{isAdmin ? 'Cofre da banca' : 'Saldo'}</p>
           <p className="text-2xl font-bold text-[var(--success)]">{balance} Kz</p>
         </div>
         {affiliate?.affiliateCode && (
@@ -516,6 +609,11 @@ function AccountTab({
       </div>
 
       <div className="space-y-2">
+        {isAdmin && onOpenAdmin && (
+          <button type="button" onClick={onOpenAdmin} className="btn btn-purple w-full">
+            <Shield size={18} /> Painel da banca
+          </button>
+        )}
         <button type="button" onClick={onOpenAffiliates} className="btn btn-ghost w-full">
           <Users size={18} /> Programa de afiliados
         </button>

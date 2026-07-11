@@ -2,14 +2,24 @@
 
 import { useState, useEffect, useRef } from 'react';
 import { AlertTriangle, ArrowLeft, Loader2 } from 'lucide-react';
-import { fetchServerTimeOffset } from '../lib/supabase';
-import { payAffiliateCommission } from '../lib/affiliate';
 import {
+  fetchServerTimeOffset,
+  nudgeServerOffsetToward,
+  supabase,
+} from '../lib/supabase';
+import { payAffiliateCommission } from '../lib/affiliate';
+import { creditHouseBank } from '../lib/house-bank';
+import {
+  AVIATOR_CRASH_EVENT,
+  AVIATOR_SYNC_CHANNEL,
   BETTING_MS,
   SERVER_SYNC_MS,
   TICK_MS,
   formatSeconds,
+  forceCrashedSnapshot,
+  getCrashServerMomentMs,
   getGameSnapshot,
+  type AviatorCrashBroadcast,
   type GameSnapshot,
 } from '../lib/crash-engine';
 import CrashChart from './CrashChart';
@@ -65,6 +75,11 @@ export default function AviatorGame({
   const lossNotifiedRef = useRef(false);
   const pushOutcomeRef = useRef(pushOutcome);
   const publishRef = useRef(publish);
+  /** Peers já reportaram crash desta rodada → força UI em crashed. */
+  const peerCrashRef = useRef<AviatorCrashBroadcast | null>(null);
+  /** Já transmitimos o crash desta rodada. */
+  const crashBroadcastedRef = useRef<number | null>(null);
+  const syncChannelRef = useRef<ReturnType<typeof supabase.channel> | null>(null);
 
   useEffect(() => {
     pushOutcomeRef.current = pushOutcome;
@@ -82,29 +97,144 @@ export default function AviatorGame({
     hasCashedOutRef.current = hasCashedOut;
   }, [hasCashedOut]);
 
+  // Relógio do servidor (ms) — re-sync frequente
   useEffect(() => {
     let cancelled = false;
 
-    const sync = async () => {
-      const offset = await fetchServerTimeOffset();
+    const sync = async (force = false) => {
+      const offset = await fetchServerTimeOffset(force);
       if (cancelled) return;
       serverOffsetRef.current = offset;
       setClockSynced(true);
-      setGame(getGameSnapshot(Date.now() + offset));
+      const now = Date.now() + offset;
+      let snap = getGameSnapshot(now);
+      const peer = peerCrashRef.current;
+      if (peer && peer.roundIndex === snap.roundIndex && snap.phase !== 'crashed') {
+        snap = forceCrashedSnapshot(snap, peer.crashPoint, now);
+      }
+      setGame(snap);
     };
 
-    sync();
-    const id = window.setInterval(sync, SERVER_SYNC_MS);
+    void sync(true);
+    const id = window.setInterval(() => void sync(false), SERVER_SYNC_MS);
     return () => {
       cancelled = true;
       window.clearInterval(id);
     };
   }, []);
 
+  // Hard-sync: qualquer cliente que vê o crash avisa os outros (evita atraso de vários segundos)
+  useEffect(() => {
+    const ch = supabase.channel(AVIATOR_SYNC_CHANNEL, {
+      config: { broadcast: { self: false } },
+    });
+
+    ch.on('broadcast', { event: AVIATOR_CRASH_EVENT }, ({ payload }) => {
+      const msg = payload as AviatorCrashBroadcast;
+      if (!msg || typeof msg.roundIndex !== 'number') return;
+      if (msg.senderId === user.id) return;
+
+      const nowLocal = Date.now() + serverOffsetRef.current;
+      const localSnap = getGameSnapshot(nowLocal);
+
+      // Só interessa a rodada actual (ou a que estamos a voar)
+      if (msg.roundIndex !== localSnap.roundIndex && msg.roundIndex !== prevRoundRef.current) {
+        // Peer à frente: ainda na rodada antiga localmente — se estivermos no ar na rodada do peer, força
+        if (msg.roundIndex > localSnap.roundIndex) {
+          // Atrasados: puxa o relógio para o momento do crash
+          const crashAt = getCrashServerMomentMs(msg.roundIndex, msg.crashPoint);
+          const nudged = nudgeServerOffsetToward(Math.max(msg.serverNowMs || 0, crashAt));
+          serverOffsetRef.current = nudged;
+        } else {
+          return;
+        }
+      }
+
+      peerCrashRef.current = msg;
+
+      // Se o peer crashou e o nosso relógio ainda acha que estamos a voar, corrige o offset
+      if (localSnap.phase === 'flying' || localSnap.phase === 'betting') {
+        const crashAt = getCrashServerMomentMs(msg.roundIndex, msg.crashPoint);
+        // Estamos atrasados se o crash "já" deveria ter acontecido
+        if (nowLocal < crashAt) {
+          const nudged = nudgeServerOffsetToward(crashAt + 80);
+          serverOffsetRef.current = nudged;
+        }
+      }
+
+      const now = Date.now() + serverOffsetRef.current;
+      let snap = getGameSnapshot(now);
+      if (snap.roundIndex === msg.roundIndex && snap.phase !== 'crashed') {
+        snap = forceCrashedSnapshot(
+          { ...snap, roundIndex: msg.roundIndex },
+          msg.crashPoint,
+          now
+        );
+      } else if (snap.roundIndex < msg.roundIndex) {
+        // força relógio e snapshot no crash
+        const crashAt = getCrashServerMomentMs(msg.roundIndex, msg.crashPoint);
+        serverOffsetRef.current = nudgeServerOffsetToward(crashAt + 120);
+        const now2 = Date.now() + serverOffsetRef.current;
+        snap = getGameSnapshot(now2);
+        if (snap.roundIndex === msg.roundIndex && snap.phase !== 'crashed') {
+          snap = forceCrashedSnapshot(snap, msg.crashPoint, now2);
+        }
+      }
+
+      setGame(snap);
+    });
+
+    ch.subscribe();
+    syncChannelRef.current = ch;
+
+    return () => {
+      syncChannelRef.current = null;
+      void supabase.removeChannel(ch);
+    };
+  }, [user.id]);
+
+  const broadcastCrash = (roundIndex: number, crashPoint: number) => {
+    if (crashBroadcastedRef.current === roundIndex) return;
+    crashBroadcastedRef.current = roundIndex;
+
+    const serverNowMs = Date.now() + serverOffsetRef.current;
+    const payload: AviatorCrashBroadcast = {
+      roundIndex,
+      crashPoint,
+      serverNowMs,
+      senderId: user.id,
+    };
+    peerCrashRef.current = payload;
+
+    const ch = syncChannelRef.current;
+    if (ch) {
+      void ch.send({
+        type: 'broadcast',
+        event: AVIATOR_CRASH_EVENT,
+        payload,
+      });
+    }
+  };
+
   useEffect(() => {
     const tick = () => {
       const now = Date.now() + serverOffsetRef.current;
-      const snapshot = getGameSnapshot(now);
+      let snapshot = getGameSnapshot(now);
+
+      const peer = peerCrashRef.current;
+      if (
+        peer &&
+        peer.roundIndex === snapshot.roundIndex &&
+        snapshot.phase !== 'crashed'
+      ) {
+        snapshot = forceCrashedSnapshot(snapshot, peer.crashPoint, now);
+      }
+
+      // Limpa peer-crash de rodadas antigas
+      if (peer && peer.roundIndex < snapshot.roundIndex) {
+        peerCrashRef.current = null;
+      }
+
       setGame(snapshot);
 
       if (snapshot.roundIndex !== prevRoundRef.current) {
@@ -114,6 +244,11 @@ export default function AviatorGame({
         setLastWin(null);
         setActionError(null);
         lossNotifiedRef.current = false;
+      }
+
+      // Assim que entramos em crashed, avisa os amigos (mesmo sem aposta)
+      if (snapshot.phase === 'crashed') {
+        broadcastCrash(snapshot.roundIndex, snapshot.crashPoint);
       }
 
       const bet = activeBetRef.current;
@@ -142,6 +277,11 @@ export default function AviatorGame({
           multiplier: snapshot.crashPoint,
           amount: bet.amount,
         });
+        void creditHouseBank(
+          bet.amount,
+          'aviator',
+          `crash ${snapshot.crashPoint.toFixed(2)}x · r#${snapshot.roundIndex}`
+        );
       }
 
       prevPhaseRef.current = snapshot.phase;
@@ -150,7 +290,7 @@ export default function AviatorGame({
     tick();
     const id = window.setInterval(tick, TICK_MS);
     return () => window.clearInterval(id);
-  }, []);
+  }, [user.id]);
 
   const placeBet = async () => {
     if (actionLoading) return;

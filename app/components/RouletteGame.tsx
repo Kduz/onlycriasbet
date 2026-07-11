@@ -17,6 +17,7 @@ import {
   type RouletteSnapshot,
 } from '../lib/roulette';
 import { SERVER_SYNC_MS } from '../lib/crash-engine';
+import { creditHouseBank } from '../lib/house-bank';
 import { useGameToasts } from './GameToastProvider';
 import RouletteWheel from './RouletteWheel';
 import RichLeaderboard from './RichLeaderboard';
@@ -163,6 +164,11 @@ export default function RouletteGame({
         gameLabel: 'Roleta dos Crias',
         detail: `${s.result.number} ${COLOR_LABEL[s.result.color]}`,
       });
+      void creditHouseBank(
+        bet.amount,
+        'roulette',
+        `${s.result.number} ${COLOR_LABEL[s.result.color]} · r#${s.roundIndex}`
+      );
     }
   }, [user.id]);
 

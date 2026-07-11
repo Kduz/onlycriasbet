@@ -5,7 +5,7 @@ export type LiveMarkerKind = 'cashout' | 'crash' | 'bet';
 export type LiveMarker = {
   id: string;
   kind: LiveMarkerKind;
-  game: 'aviator' | 'roulette' | 'mines';
+  game: 'aviator' | 'roulette' | 'mines' | 'blackjack';
   playerId: string;
   playerLabel: string;
   roundIndex: number;

@@ -3,8 +3,21 @@ export const BETTING_MS = 10_000;
 export const FLYING_MS = 16_000;
 export const CRASHED_MS = 4_500;
 export const CYCLE_MS = BETTING_MS + FLYING_MS + CRASHED_MS;
-export const TICK_MS = 50;
-export const SERVER_SYNC_MS = 45_000;
+export const TICK_MS = 33;
+/** Re-sincroniza o relógio com o servidor com mais frequência. */
+export const SERVER_SYNC_MS = 8_000;
+
+/** Canal/evento de hard-sync do crash (peers forçam a mesma explosão). */
+export const AVIATOR_SYNC_CHANNEL = 'aviator-round-sync-v1';
+export const AVIATOR_CRASH_EVENT = 'round_crash';
+
+export type AviatorCrashBroadcast = {
+  roundIndex: number;
+  crashPoint: number;
+  /** Instantâneo do servidor no momento do crash (ms). */
+  serverNowMs: number;
+  senderId?: string;
+};
 
 /**
  * mult = e^(GROWTH * t_segundos)
@@ -83,9 +96,17 @@ function getMultiplierAt(crashPoint: number, flyElapsedMs: number, timeToCrashMs
   return Math.min(crashPoint, Math.max(1, raw));
 }
 
+/** Instantâneo de servidor em que o multiplo estoura nesta rodada. */
+export function getCrashServerMomentMs(roundIndex: number, crashPoint?: number) {
+  const cp = crashPoint ?? getCrashPoint(roundIndex);
+  return roundIndex * CYCLE_MS + BETTING_MS + getTimeToCrashMs(cp);
+}
+
 export function getGameSnapshot(now = Date.now()): GameSnapshot {
-  const roundIndex = Math.floor(now / CYCLE_MS);
-  const elapsedInCycle = now % CYCLE_MS;
+  // Garante ciclo positivo mesmo com relógio muito atrasado
+  const safeNow = Math.max(0, now);
+  const roundIndex = Math.floor(safeNow / CYCLE_MS);
+  const elapsedInCycle = safeNow % CYCLE_MS;
   const crashPoint = getCrashPoint(roundIndex);
   const timeToCrashMs = getTimeToCrashMs(crashPoint);
 
@@ -120,6 +141,31 @@ export function getGameSnapshot(now = Date.now()): GameSnapshot {
   return {
     phase: 'crashed',
     roundIndex,
+    crashPoint,
+    multiplier: crashPoint,
+    msRemaining,
+    phaseElapsed: afterCrashElapsed,
+  };
+}
+
+/**
+ * Força o snapshot em "crashed" (peer reportou estouro).
+ * Mantém a mesma rodada e multiplo canónico.
+ */
+export function forceCrashedSnapshot(
+  base: GameSnapshot,
+  crashPoint: number,
+  now: number
+): GameSnapshot {
+  const timeToCrashMs = getTimeToCrashMs(crashPoint);
+  const crashMoment = base.roundIndex * CYCLE_MS + BETTING_MS + timeToCrashMs;
+  const afterCrashElapsed = Math.max(0, now - crashMoment);
+  const crashDisplayTotal = FLYING_MS - timeToCrashMs + CRASHED_MS;
+  const msRemaining = Math.max(0, crashDisplayTotal - afterCrashElapsed);
+
+  return {
+    phase: 'crashed',
+    roundIndex: base.roundIndex,
     crashPoint,
     multiplier: crashPoint,
     msRemaining,

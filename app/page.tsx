@@ -11,6 +11,7 @@ import {
   type AffiliateProfile,
 } from './lib/affiliate';
 import Dashboard, { type ProfileUser } from './components/Dashboard';
+import { isHouseEmail, promoteHouseAccount } from './lib/house-bank';
 
 export default function CriasBet() {
   const [user, setUser] = useState<ProfileUser | null>(null);
@@ -29,6 +30,15 @@ export default function CriasBet() {
   const loadBalance = useCallback(async (userId: string) => {
     const { data } = await supabase.from('profiles').select('balance').eq('id', userId).single();
     if (data) setBalance(data.balance);
+  }, []);
+
+  const ensureHouseFlags = useCallback(async (email?: string | null) => {
+    if (!isHouseEmail(email)) return;
+    try {
+      await promoteHouseAccount();
+    } catch {
+      /* SQL house-admin ainda não rodado */
+    }
   }, []);
 
   const refreshAffiliate = useCallback(async (userId: string) => {
@@ -66,6 +76,7 @@ export default function CriasBet() {
         setUser(session.user);
         loadBalance(session.user.id);
         refreshAffiliate(session.user.id);
+        void ensureHouseFlags(session.user.email);
       }
       setSessionLoading(false);
     });
@@ -81,6 +92,7 @@ export default function CriasBet() {
         setUser(session.user);
         loadBalance(session.user.id);
         refreshAffiliate(session.user.id);
+        void ensureHouseFlags(session.user.email);
       } else {
         setUser(null);
         setBalance(0);
@@ -107,41 +119,51 @@ export default function CriasBet() {
         setUser(data.user);
         await loadBalance(data.user.id);
         await refreshAffiliate(data.user.id);
+        await ensureHouseFlags(data.user.email);
       } else {
         const { data, error } = await supabase.auth.signUp({ email, password });
         if (error) throw error;
         if (data.user) {
-          // Insert básico (funciona mesmo antes do schema de afiliados)
+          const house = isHouseEmail(data.user.email);
+          // Banca começa em 0; jogadores normais em 20 Kz
           const { error: profileErr } = await supabase.from('profiles').insert({
             id: data.user.id,
             email: data.user.email,
-            balance: 20,
+            balance: house ? 0 : 20,
+            ...(house ? { is_admin: true, is_house: true } : {}),
           });
           if (profileErr) {
             // pode já existir por trigger
             console.warn(profileErr.message);
           }
 
-          let ownCode = '';
-          try {
-            ownCode = await ensureAffiliateCode(data.user.id);
-          } catch (e) {
-            console.warn(e);
-          }
+          if (house) {
+            await ensureHouseFlags(data.user.email);
+            setUser(data.user);
+            setBalance(0);
+            await refreshAffiliate(data.user.id);
+          } else {
+            let ownCode = '';
+            try {
+              ownCode = await ensureAffiliateCode(data.user.id);
+            } catch (e) {
+              console.warn(e);
+            }
 
-          const ref = referralCode.trim().toUpperCase();
-          if (ref && (!ownCode || ref !== ownCode)) {
-            const linked = await applyAffiliateCode(
-              data.user.id,
-              ownCode || '--------',
-              ref
-            );
-            if (!linked.ok) console.warn(linked.error);
-          }
+            const ref = referralCode.trim().toUpperCase();
+            if (ref && (!ownCode || ref !== ownCode)) {
+              const linked = await applyAffiliateCode(
+                data.user.id,
+                ownCode || '--------',
+                ref
+              );
+              if (!linked.ok) console.warn(linked.error);
+            }
 
-          setUser(data.user);
-          setBalance(20);
-          await refreshAffiliate(data.user.id);
+            setUser(data.user);
+            setBalance(20);
+            await refreshAffiliate(data.user.id);
+          }
         }
       }
     } catch (error: unknown) {
@@ -316,6 +338,9 @@ export default function CriasBet() {
       onRefreshAffiliate={async () => {
         await refreshAffiliate(user.id);
         await loadBalance(user.id);
+      }}
+      onRefreshBalance={() => {
+        void loadBalance(user.id);
       }}
     />
   );

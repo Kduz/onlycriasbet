@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { AlertTriangle, ArrowLeft, Loader2, Pickaxe } from 'lucide-react';
 import { fetchServerTimeOffset, supabase } from '../lib/supabase';
 import { SERVER_SYNC_MS } from '../lib/crash-engine';
+import { creditHouseBank } from '../lib/house-bank';
 import {
   MINES_BET_MS,
   MINES_BOMBS,
@@ -169,9 +170,14 @@ export default function MinesGame({
           if (winners.length === 0) {
             setWinnersText(
               pot > 0
-                ? `Ninguém sobreviveu com diamantes. Pot de ${pot} Kz pro void ⛏`
+                ? `Ninguém sobreviveu com diamantes. Pot de ${pot} Kz foi pra banca 🏦`
                 : 'Sem apostas nesta rodada.'
             );
+            // Cada jogador local que entrou manda o próprio stake à banca (soma = pot)
+            const me = current.find((e) => e.playerId === user.id && e.stake > 0);
+            if (me) {
+              void creditHouseBank(me.stake, 'mines', `pot void · r#${s.roundIndex}`);
+            }
             return current;
           }
           const names = winners.map((w) => shortName(w.playerLabel)).join(', ');
@@ -189,7 +195,7 @@ export default function MinesGame({
     tick();
     const id = window.setInterval(tick, MINES_TICK_MS);
     return () => window.clearInterval(id);
-  }, [resetRound]);
+  }, [resetRound, user.id]);
 
   // Winner payout: when result phase and I'm winner, credit pot share once
   useEffect(() => {
@@ -459,9 +465,11 @@ export default function MinesGame({
                 {Array.from({ length: MINES_CELLS }, (_, i) => {
                   const isRev = revealed[i];
                   const isMine = snap.mines[i];
-                  const showMine =
-                    isRev && (isMine || snap.phase === 'result' || blown);
-                  const showGem = isRev && !isMine;
+                  // No fim / após explode: só bombas reais viram 💣 — diamantes abertos ficam 💎
+                  const revealAllMines = blown || snap.phase === 'result';
+                  const showMine = isMine && (isRev || revealAllMines);
+                  const showGem = !isMine && isRev;
+                  const isOpen = isRev || showMine;
                   const locked =
                     snap.phase !== 'playing' || !joined || blown || cashed;
 
@@ -471,14 +479,14 @@ export default function MinesGame({
                       type="button"
                       disabled={locked || isRev}
                       onClick={() => reveal(i)}
-                      className={`mines-cell ${isRev ? 'is-open' : 'is-closed'} ${
+                      className={`mines-cell ${isOpen ? 'is-open' : 'is-closed'} ${
                         showMine ? 'is-mine' : ''
                       } ${showGem ? 'is-gem' : ''}`}
                       aria-label={
                         showMine ? 'Creeper' : showGem ? 'Diamante' : 'Bloco de grama'
                       }
                     >
-                      {!isRev && (
+                      {!isOpen && (
                         <>
                           <span className="mc-grass-top" aria-hidden />
                           <span className="mc-grass-side" aria-hidden />
