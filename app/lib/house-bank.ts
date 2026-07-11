@@ -116,3 +116,57 @@ export async function promoteHouseAccount() {
   if (!raw?.ok) return { ok: false as const, error: raw?.error ?? 'falhou' };
   return { ok: true as const, id: raw.id };
 }
+
+export type AdminCreditResult =
+  | {
+      ok: true;
+      email: string;
+      amount: number;
+      new_balance: number;
+      user_id?: string;
+    }
+  | { ok: false; error: string };
+
+/**
+ * Admin: adiciona saldo a um jogador pelo email.
+ * Requer RPC `admin_credit_player` (supabase/admin-credit-player.sql).
+ */
+export async function adminCreditPlayer(
+  email: string,
+  amount: number
+): Promise<AdminCreditResult> {
+  const em = email.trim().toLowerCase();
+  const amt = Math.floor(amount);
+  if (!em || !em.includes('@')) {
+    return { ok: false, error: 'Email invalido' };
+  }
+  if (amt < 1) {
+    return { ok: false, error: 'Valor minimo: 1 Kz' };
+  }
+
+  try {
+    const { data, error } = await supabase.rpc('admin_credit_player', {
+      p_email: em,
+      p_amount: amt,
+    });
+    if (error) {
+      return { ok: false, error: error.message };
+    }
+    const raw = data as Record<string, unknown> | null;
+    if (!raw || raw.ok === false) {
+      return { ok: false, error: String(raw?.error ?? 'falhou') };
+    }
+    return {
+      ok: true,
+      email: String(raw.email ?? em),
+      amount: Number(raw.amount ?? amt),
+      new_balance: Number(raw.new_balance ?? 0),
+      user_id: raw.user_id ? String(raw.user_id) : undefined,
+    };
+  } catch (e) {
+    return {
+      ok: false,
+      error: e instanceof Error ? e.message : 'erro',
+    };
+  }
+}

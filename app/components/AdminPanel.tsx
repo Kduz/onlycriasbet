@@ -4,6 +4,7 @@ import { useCallback, useEffect, useState } from 'react';
 import {
   ArrowLeft,
   Building2,
+  Coins,
   Loader2,
   RefreshCw,
   Shield,
@@ -12,6 +13,7 @@ import {
   Wallet,
 } from 'lucide-react';
 import {
+  adminCreditPlayer,
   fetchAdminDashboard,
   HOUSE_BANK_EMAIL,
   type AdminDashboard,
@@ -51,15 +53,29 @@ function gameLabel(game?: string | null) {
       return 'Mines';
     case 'blackjack':
       return '21';
+    case 'tigrinho':
+      return 'Tigrinho';
+    case 'memory':
+      return 'Memoria';
+    case 'admin_grant':
+      return 'Credito admin';
     default:
       return game || '—';
   }
 }
 
+const CREDIT_PRESETS = [10, 50, 100, 500, 1000];
+
 export default function AdminPanel({ balance, onBack, onBalanceRefresh }: AdminPanelProps) {
   const [data, setData] = useState<AdminDashboard | null>(null);
   const [loading, setLoading] = useState(true);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
+
+  const [creditEmail, setCreditEmail] = useState('');
+  const [creditAmount, setCreditAmount] = useState(50);
+  const [creditLoading, setCreditLoading] = useState(false);
+  const [creditMsg, setCreditMsg] = useState<string | null>(null);
+  const [creditErr, setCreditErr] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -78,6 +94,31 @@ export default function AdminPanel({ balance, onBack, onBalanceRefresh }: AdminP
   useEffect(() => {
     void load();
   }, [load]);
+
+  const onCredit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setCreditMsg(null);
+    setCreditErr(null);
+    setCreditLoading(true);
+    const res = await adminCreditPlayer(creditEmail, creditAmount);
+    setCreditLoading(false);
+    if (!res.ok) {
+      setCreditErr(res.error);
+      return;
+    }
+    setCreditMsg(
+      `+${formatKz(res.amount)} para ${res.email} · novo saldo ${formatKz(res.new_balance)}`
+    );
+    setCreditAmount(50);
+    void load();
+  };
+
+  const fillEmail = (email: string | null | undefined) => {
+    if (!email) return;
+    setCreditEmail(email);
+    setCreditMsg(null);
+    setCreditErr(null);
+  };
 
   return (
     <div className="admin-page">
@@ -112,8 +153,8 @@ export default function AdminPanel({ balance, onBack, onBalanceRefresh }: AdminP
         <div className="admin-alert danger">
           {errorMsg}
           <p className="mt-1 text-xs opacity-80">
-            Rode <code>supabase/house-admin.sql</code> no SQL Editor e faça login com a conta da
-            banca.
+            Rode <code>supabase/house-admin.sql</code> e{' '}
+            <code>supabase/admin-credit-player.sql</code> no SQL Editor.
           </p>
         </div>
       )}
@@ -169,6 +210,82 @@ export default function AdminPanel({ balance, onBack, onBalanceRefresh }: AdminP
             O teu saldo de login (<strong>{formatKz(balance)}</strong>) é o cofre da banca.
           </p>
 
+          {/* Dar dinheiro */}
+          <section className="admin-card admin-credit-card">
+            <div className="admin-card-head">
+              <h2>
+                <Coins size={18} className="inline-block mr-1.5 align-text-bottom text-amber-300" />
+                Dar dinheiro
+              </h2>
+              <span>por email</span>
+            </div>
+            <p className="admin-credit-help">
+              Escreve o email da conta e o valor em Kz. O saldo do jogador sobe na hora.
+            </p>
+            <form onSubmit={onCredit} className="admin-credit-form">
+              <div className="admin-credit-fields">
+                <label className="admin-field">
+                  <span>Email do jogador</span>
+                  <input
+                    type="email"
+                    required
+                    value={creditEmail}
+                    onChange={(e) => setCreditEmail(e.target.value)}
+                    placeholder="amigo@email.com"
+                    className="input-field"
+                    autoComplete="off"
+                  />
+                </label>
+                <label className="admin-field">
+                  <span>Valor (Kz)</span>
+                  <input
+                    type="number"
+                    required
+                    min={1}
+                    max={1000000}
+                    value={creditAmount}
+                    onChange={(e) => setCreditAmount(Math.max(0, Number(e.target.value)))}
+                    className="input-field admin-credit-amount"
+                  />
+                </label>
+              </div>
+              <div className="admin-credit-presets">
+                {CREDIT_PRESETS.map((v) => (
+                  <button
+                    key={v}
+                    type="button"
+                    className={`chip ${creditAmount === v ? 'chip-active' : ''}`}
+                    onClick={() => setCreditAmount(v)}
+                  >
+                    {v}
+                  </button>
+                ))}
+              </div>
+              <button
+                type="submit"
+                className="btn btn-purple w-full"
+                disabled={creditLoading || !creditEmail.trim() || creditAmount < 1}
+              >
+                {creditLoading ? (
+                  <Loader2 className="animate-spin" size={18} />
+                ) : (
+                  `Adicionar ${formatKz(creditAmount)}`
+                )}
+              </button>
+            </form>
+            {creditMsg && <div className="admin-alert ok mt-3">{creditMsg}</div>}
+            {creditErr && (
+              <div className="admin-alert danger mt-3">
+                {creditErr}
+                {creditErr.includes('function') || creditErr.includes('Could not find') ? (
+                  <p className="mt-1 text-xs opacity-80">
+                    Rode no Supabase SQL Editor: <code>supabase/admin-credit-player.sql</code>
+                  </p>
+                ) : null}
+              </div>
+            )}
+          </section>
+
           <div className="admin-grid">
             <section className="admin-card">
               <div className="admin-card-head">
@@ -199,7 +316,7 @@ export default function AdminPanel({ balance, onBack, onBalanceRefresh }: AdminP
             <section className="admin-card">
               <div className="admin-card-head">
                 <h2>Jogadores</h2>
-                <span>por saldo</span>
+                <span>toca p/ preencher email</span>
               </div>
               {data.players.length === 0 ? (
                 <p className="admin-empty">Nenhum profile.</p>
@@ -208,14 +325,24 @@ export default function AdminPanel({ balance, onBack, onBalanceRefresh }: AdminP
                   {data.players.map((p, i) => (
                     <li
                       key={p.id}
-                      className={p.is_house || p.is_admin ? 'is-house' : ''}
+                      className={`admin-player-row ${
+                        p.is_house || p.is_admin ? 'is-house' : ''
+                      }`}
                     >
-                      <span className="admin-rank">#{i + 1}</span>
-                      <span className="admin-player-mail truncate">
-                        {p.is_house ? '🏦 Banca' : maskPlayerLabel(p.email)}
-                        {p.is_admin && !p.is_house ? ' · admin' : ''}
-                      </span>
-                      <span className="admin-player-bal">{formatKz(Number(p.balance))}</span>
+                      <button
+                        type="button"
+                        className="admin-player-pick"
+                        onClick={() => fillEmail(p.email)}
+                        disabled={!p.email || !!p.is_house}
+                        title={p.email ? `Creditar ${p.email}` : undefined}
+                      >
+                        <span className="admin-rank">#{i + 1}</span>
+                        <span className="admin-player-mail truncate">
+                          {p.is_house ? 'Banca' : p.email || maskPlayerLabel(p.email)}
+                          {p.is_admin && !p.is_house ? ' · admin' : ''}
+                        </span>
+                        <span className="admin-player-bal">{formatKz(Number(p.balance))}</span>
+                      </button>
                     </li>
                   ))}
                 </ul>

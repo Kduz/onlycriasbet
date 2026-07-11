@@ -11,6 +11,7 @@ import {
   type AffiliateProfile,
 } from './lib/affiliate';
 import Dashboard, { type ProfileUser } from './components/Dashboard';
+import { FantasyFrame } from './components/FantasyDecor';
 import { isHouseEmail, promoteHouseAccount } from './lib/house-bank';
 
 export default function CriasBet() {
@@ -194,24 +195,23 @@ export default function CriasBet() {
 
   if (!user) {
     return (
-      <main className="min-h-screen flex items-center justify-center p-5 sm:p-6">
-        <div className="w-full max-w-[400px]">
-          <header className="text-center mb-8">
-            <h1 className="text-4xl sm:text-5xl font-extrabold text-gradient tracking-tight">
-              CRIA&apos;S BET
-            </h1>
-            <p className="page-subtitle mt-2">Apostas satíricas · só diversão</p>
+      <main className="auth-screen">
+        <div className="auth-card-wrap">
+          <header className="auth-header">
+            <span className="auth-logo" aria-hidden>
+              ₵
+            </span>
+            <h1 className="auth-title">Cria&apos;s Bet</h1>
+            <p className="auth-sub">Apostas satíricas · só diversão</p>
           </header>
 
-          <div className="surface glow-purple p-6 sm:p-7">
-            <div className="flex rounded-xl bg-[#0c0b12] p-1 mb-6 border border-[var(--border)]">
+          <FantasyFrame gemTop className="auth-card fx-auth">
+            <div className="auth-tabs" role="tablist">
               <button
                 type="button"
-                className={`flex-1 min-h-11 rounded-lg text-sm font-semibold transition ${
-                  isLogin
-                    ? 'bg-[rgba(139,92,246,0.25)] text-white'
-                    : 'text-[var(--muted)] hover:text-white'
-                }`}
+                role="tab"
+                aria-selected={isLogin}
+                className={`auth-tab ${isLogin ? 'is-active' : ''}`}
                 onClick={() => {
                   setIsLogin(true);
                   setErrorMsg(null);
@@ -221,11 +221,9 @@ export default function CriasBet() {
               </button>
               <button
                 type="button"
-                className={`flex-1 min-h-11 rounded-lg text-sm font-semibold transition ${
-                  !isLogin
-                    ? 'bg-[rgba(139,92,246,0.25)] text-white'
-                    : 'text-[var(--muted)] hover:text-white'
-                }`}
+                role="tab"
+                aria-selected={!isLogin}
+                className={`auth-tab ${!isLogin ? 'is-active' : ''}`}
                 onClick={() => {
                   setIsLogin(false);
                   setErrorMsg(null);
@@ -303,7 +301,7 @@ export default function CriasBet() {
                 </div>
               )}
 
-              <button type="submit" disabled={loading} className="btn btn-purple w-full mt-2">
+              <button type="submit" disabled={loading} className="btn btn-purple w-full mt-1">
                 {loading ? (
                   <>
                     <Loader2 className="animate-spin" size={18} /> Aguarde...
@@ -315,11 +313,11 @@ export default function CriasBet() {
                 )}
               </button>
             </form>
-          </div>
+          </FantasyFrame>
 
-          <p className="text-center text-xs text-[var(--muted)] mt-6 flex items-start justify-center gap-1.5 leading-relaxed px-2">
-            <AlertTriangle size={14} className="shrink-0 mt-0.5 text-[var(--danger)]" />
-            Site de sátira. Nada é real. Não use dinheiro de verdade.
+          <p className="auth-disclaimer">
+            <AlertTriangle size={13} />
+            Sátira · nada é real · sem dinheiro de verdade
           </p>
         </div>
       </main>
