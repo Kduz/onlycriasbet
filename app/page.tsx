@@ -1,65 +1,322 @@
-import Image from "next/image";
+'use client';
 
-export default function Home() {
-  return (
-    <div className="flex flex-col flex-1 items-center justify-center bg-zinc-50 font-sans dark:bg-black">
-      <main className="flex flex-1 w-full max-w-3xl flex-col items-center justify-between py-32 px-16 bg-white dark:bg-black sm:items-start">
-        <Image
-          className="dark:invert"
-          src="/next.svg"
-          alt="Next.js logo"
-          width={100}
-          height={20}
-          priority
-        />
-        <div className="flex flex-col items-center gap-6 text-center sm:items-start sm:text-left">
-          <h1 className="max-w-xs text-3xl font-semibold leading-10 tracking-tight text-black dark:text-zinc-50">
-            To get started, edit the page.tsx file.
-          </h1>
-          <p className="max-w-md text-lg leading-8 text-zinc-600 dark:text-zinc-400">
-            Looking for a starting point or more instructions? Head over to{" "}
-            <a
-              href="https://vercel.com/templates?framework=next.js&utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-              className="font-medium text-zinc-950 dark:text-zinc-50"
-            >
-              Templates
-            </a>{" "}
-            or the{" "}
-            <a
-              href="https://nextjs.org/learn?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-              className="font-medium text-zinc-950 dark:text-zinc-50"
-            >
-              Learning
-            </a>{" "}
-            center.
-          </p>
-        </div>
-        <div className="flex flex-col gap-4 text-base font-medium sm:flex-row">
-          <a
-            className="flex h-12 w-full items-center justify-center gap-2 rounded-full bg-foreground px-5 text-background transition-colors hover:bg-[#383838] dark:hover:bg-[#ccc] md:w-[158px]"
-            href="https://vercel.com/new?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            <Image
-              className="dark:invert"
-              src="/vercel.svg"
-              alt="Vercel logomark"
-              width={16}
-              height={16}
-            />
-            Deploy Now
-          </a>
-          <a
-            className="flex h-12 w-full items-center justify-center rounded-full border border-solid border-black/[.08] px-5 transition-colors hover:border-transparent hover:bg-black/[.04] dark:border-white/[.145] dark:hover:bg-[#1a1a1a] md:w-[158px]"
-            href="https://nextjs.org/docs?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            Documentation
-          </a>
+import { useState, useEffect, useCallback } from 'react';
+import { AlertTriangle, Loader2 } from 'lucide-react';
+import { supabase } from './lib/supabase';
+import {
+  applyAffiliateCode,
+  captureRefFromUrl,
+  ensureAffiliateCode,
+  loadAffiliateProfile,
+  type AffiliateProfile,
+} from './lib/affiliate';
+import Dashboard, { type ProfileUser } from './components/Dashboard';
+
+export default function CriasBet() {
+  const [user, setUser] = useState<ProfileUser | null>(null);
+  const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
+  const [referralCode, setReferralCode] = useState('');
+  const [isLogin, setIsLogin] = useState(true);
+  const [loading, setLoading] = useState(false);
+  const [errorMsg, setErrorMsg] = useState<string | null>(null);
+  const [balance, setBalance] = useState(0);
+  const [sessionLoading, setSessionLoading] = useState(true);
+  const [affiliate, setAffiliate] = useState<AffiliateProfile | null>(null);
+  const [affiliateLoading, setAffiliateLoading] = useState(false);
+  const [fromInvite, setFromInvite] = useState(false);
+
+  const loadBalance = useCallback(async (userId: string) => {
+    const { data } = await supabase.from('profiles').select('balance').eq('id', userId).single();
+    if (data) setBalance(data.balance);
+  }, []);
+
+  const refreshAffiliate = useCallback(async (userId: string) => {
+    setAffiliateLoading(true);
+    try {
+      const profile = await loadAffiliateProfile(userId);
+      setAffiliate(profile);
+    } catch (err) {
+      console.error(err);
+    } finally {
+      setAffiliateLoading(false);
+    }
+  }, []);
+
+  const updateBalance = useCallback(async (userId: string, newBalance: number) => {
+    const { error } = await supabase.from('profiles').update({ balance: newBalance }).eq('id', userId);
+    return { error: error ? new Error(error.message) : null };
+  }, []);
+
+  useEffect(() => {
+    const ref = captureRefFromUrl();
+    if (ref) {
+      setReferralCode(ref);
+      setFromInvite(true);
+      setIsLogin(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    let mounted = true;
+
+    supabase.auth.getSession().then(({ data: { session } }) => {
+      if (!mounted) return;
+      if (session?.user) {
+        setUser(session.user);
+        loadBalance(session.user.id);
+        refreshAffiliate(session.user.id);
+      }
+      setSessionLoading(false);
+    });
+
+    const {
+      data: { subscription },
+    } = supabase.auth.onAuthStateChange((event, session) => {
+      if (!mounted) return;
+      // Evita re-fetch em todo TOKEN_REFRESHED (pode gerar churn desnecessário)
+      if (event === 'TOKEN_REFRESHED') return;
+
+      if (session?.user) {
+        setUser(session.user);
+        loadBalance(session.user.id);
+        refreshAffiliate(session.user.id);
+      } else {
+        setUser(null);
+        setBalance(0);
+        setAffiliate(null);
+      }
+    });
+
+    return () => {
+      mounted = false;
+      subscription.unsubscribe();
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- monta uma vez
+  }, []);
+
+  const handleAuth = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setLoading(true);
+    setErrorMsg(null);
+
+    try {
+      if (isLogin) {
+        const { data, error } = await supabase.auth.signInWithPassword({ email, password });
+        if (error) throw error;
+        setUser(data.user);
+        await loadBalance(data.user.id);
+        await refreshAffiliate(data.user.id);
+      } else {
+        const { data, error } = await supabase.auth.signUp({ email, password });
+        if (error) throw error;
+        if (data.user) {
+          // Insert básico (funciona mesmo antes do schema de afiliados)
+          const { error: profileErr } = await supabase.from('profiles').insert({
+            id: data.user.id,
+            email: data.user.email,
+            balance: 20,
+          });
+          if (profileErr) {
+            // pode já existir por trigger
+            console.warn(profileErr.message);
+          }
+
+          let ownCode = '';
+          try {
+            ownCode = await ensureAffiliateCode(data.user.id);
+          } catch (e) {
+            console.warn(e);
+          }
+
+          const ref = referralCode.trim().toUpperCase();
+          if (ref && (!ownCode || ref !== ownCode)) {
+            const linked = await applyAffiliateCode(
+              data.user.id,
+              ownCode || '--------',
+              ref
+            );
+            if (!linked.ok) console.warn(linked.error);
+          }
+
+          setUser(data.user);
+          setBalance(20);
+          await refreshAffiliate(data.user.id);
+        }
+      }
+    } catch (error: unknown) {
+      const message = error instanceof Error ? error.message : 'Erro na autenticação';
+      setErrorMsg(message);
+    }
+
+    setLoading(false);
+  };
+
+  const logout = async () => {
+    await supabase.auth.signOut();
+    setUser(null);
+    setBalance(0);
+    setAffiliate(null);
+  };
+
+  if (sessionLoading) {
+    return (
+      <main className="min-h-screen flex items-center justify-center p-6">
+        <div className="flex flex-col items-center gap-3 text-[var(--text-secondary)]">
+          <Loader2 className="animate-spin text-purple-400" size={28} />
+          <p className="text-sm">Carregando...</p>
         </div>
       </main>
-    </div>
+    );
+  }
+
+  if (!user) {
+    return (
+      <main className="min-h-screen flex items-center justify-center p-5 sm:p-6">
+        <div className="w-full max-w-[400px]">
+          <header className="text-center mb-8">
+            <h1 className="text-4xl sm:text-5xl font-extrabold text-gradient tracking-tight">
+              CRIA&apos;S BET
+            </h1>
+            <p className="page-subtitle mt-2">Apostas satíricas · só diversão</p>
+          </header>
+
+          <div className="surface glow-purple p-6 sm:p-7">
+            <div className="flex rounded-xl bg-[#0c0b12] p-1 mb-6 border border-[var(--border)]">
+              <button
+                type="button"
+                className={`flex-1 min-h-11 rounded-lg text-sm font-semibold transition ${
+                  isLogin
+                    ? 'bg-[rgba(139,92,246,0.25)] text-white'
+                    : 'text-[var(--muted)] hover:text-white'
+                }`}
+                onClick={() => {
+                  setIsLogin(true);
+                  setErrorMsg(null);
+                }}
+              >
+                Entrar
+              </button>
+              <button
+                type="button"
+                className={`flex-1 min-h-11 rounded-lg text-sm font-semibold transition ${
+                  !isLogin
+                    ? 'bg-[rgba(139,92,246,0.25)] text-white'
+                    : 'text-[var(--muted)] hover:text-white'
+                }`}
+                onClick={() => {
+                  setIsLogin(false);
+                  setErrorMsg(null);
+                }}
+              >
+                Criar conta
+              </button>
+            </div>
+
+            {fromInvite && !isLogin && referralCode && (
+              <div className="banner banner-info mb-5">
+                Convite detectado. Código:{' '}
+                <strong className="mono tracking-wider">{referralCode}</strong>
+              </div>
+            )}
+
+            {errorMsg && (
+              <div className="banner banner-danger mb-5" role="alert">
+                {errorMsg}
+              </div>
+            )}
+
+            <form onSubmit={handleAuth} className="space-y-4">
+              <div className="field">
+                <label htmlFor="email" className="field-label">
+                  Email
+                </label>
+                <input
+                  id="email"
+                  type="email"
+                  autoComplete="email"
+                  placeholder="voce@email.com"
+                  value={email}
+                  onChange={(e) => setEmail(e.target.value)}
+                  className="input-field"
+                  required
+                />
+              </div>
+
+              <div className="field">
+                <label htmlFor="password" className="field-label">
+                  Senha
+                </label>
+                <input
+                  id="password"
+                  type="password"
+                  autoComplete={isLogin ? 'current-password' : 'new-password'}
+                  placeholder="Sua senha"
+                  value={password}
+                  onChange={(e) => setPassword(e.target.value)}
+                  className="input-field"
+                  required
+                  minLength={6}
+                />
+              </div>
+
+              {!isLogin && (
+                <div className="field">
+                  <label htmlFor="ref" className="field-label">
+                    Código de afiliado{' '}
+                    <span className="text-[var(--muted)] font-normal">(opcional)</span>
+                  </label>
+                  <input
+                    id="ref"
+                    type="text"
+                    placeholder="Ex: AB12CD34"
+                    value={referralCode}
+                    onChange={(e) => setReferralCode(e.target.value.toUpperCase())}
+                    maxLength={12}
+                    className="input-field mono tracking-wider uppercase"
+                  />
+                  <p className="field-hint">
+                    Se alguém te convidou, cola o código aqui. Conta nova ganha 20 Kz.
+                  </p>
+                </div>
+              )}
+
+              <button type="submit" disabled={loading} className="btn btn-purple w-full mt-2">
+                {loading ? (
+                  <>
+                    <Loader2 className="animate-spin" size={18} /> Aguarde...
+                  </>
+                ) : isLogin ? (
+                  'Entrar'
+                ) : (
+                  'Criar conta e receber 20 Kz'
+                )}
+              </button>
+            </form>
+          </div>
+
+          <p className="text-center text-xs text-[var(--muted)] mt-6 flex items-start justify-center gap-1.5 leading-relaxed px-2">
+            <AlertTriangle size={14} className="shrink-0 mt-0.5 text-[var(--danger)]" />
+            Site de sátira. Nada é real. Não use dinheiro de verdade.
+          </p>
+        </div>
+      </main>
+    );
+  }
+
+  return (
+    <Dashboard
+      user={user}
+      balance={balance}
+      onBalanceChange={setBalance}
+      onLogout={logout}
+      updateBalance={updateBalance}
+      affiliate={affiliate}
+      affiliateLoading={affiliateLoading}
+      onRefreshAffiliate={async () => {
+        await refreshAffiliate(user.id);
+        await loadBalance(user.id);
+      }}
+    />
   );
 }
